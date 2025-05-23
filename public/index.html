@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Stream Relay</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        #videoContainer {
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto;
+        }
+        video {
+            width: 100%;
+            background: #000;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 8px;
+        }
+        button {
+            padding: 8px 16px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        #status {
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>YouTube Stream Relay</h1>
+        <div class="controls">
+            <input type="text" id="youtubeUrl" placeholder="Enter YouTube URL" value="https://www.youtube.com/watch?v=-Vjpl5d2i7I">
+            <button onclick="startStream()">Start Stream</button>
+            <button onclick="stopStream()">Stop Stream</button>
+        </div>
+        <div id="status">Status: Not connected</div>
+        <div id="videoContainer">
+            <video id="videoPlayer" controls></video>
+        </div>
+    </div>
+
+    <script>
+        let mediaSource;
+        let sourceBuffer;
+        let ws;
+        let queue = [];
+        let isBufferUpdating = false;
+
+        function startStream() {
+            const youtubeUrl = document.getElementById('youtubeUrl').value;
+            if (!youtubeUrl) {
+                alert('Please enter a YouTube URL');
+                return;
+            }
+
+            // Close existing connection if any
+            if (ws) {
+                ws.close();
+            }
+
+            // Create MediaSource
+            mediaSource = new MediaSource();
+            const videoPlayer = document.getElementById('videoPlayer');
+            videoPlayer.src = URL.createObjectURL(mediaSource);
+
+            mediaSource.addEventListener('sourceopen', () => {
+                sourceBuffer = mediaSource.addSourceBuffer('video/mp2t');
+                
+                sourceBuffer.addEventListener('updateend', () => {
+                    isBufferUpdating = false;
+                    if (queue.length > 0) {
+                        isBufferUpdating = true;
+                        sourceBuffer.appendBuffer(queue.shift());
+                    }
+                });
+            });
+
+            // Connect to WebSocket
+            const wsUrl = `ws://${window.location.hostname}:3000/api/stream?url=${encodeURIComponent(youtubeUrl)}`;
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                document.getElementById('status').textContent = 'Status: Connected';
+            };
+
+            ws.onmessage = (event) => {
+                if (event.data instanceof Blob) {
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const data = new Uint8Array(reader.result);
+                        if (sourceBuffer && !sourceBuffer.updating) {
+                            isBufferUpdating = true;
+                            sourceBuffer.appendBuffer(data);
+                        } else {
+                            queue.push(data);
+                        }
+                    };
+                    reader.readAsArrayBuffer(event.data);
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                document.getElementById('status').textContent = 'Status: Error occurred';
+            };
+
+            ws.onclose = () => {
+                document.getElementById('status').textContent = 'Status: Disconnected';
+            };
+        }
+
+        function stopStream() {
+            if (ws) {
+                ws.close();
+            }
+            if (mediaSource && mediaSource.readyState === 'open') {
+                mediaSource.endOfStream();
+            }
+            const videoPlayer = document.getElementById('videoPlayer');
+            videoPlayer.src = '';
+            document.getElementById('status').textContent = 'Status: Stream stopped';
+        }
+    </script>
+</body>
+</html> 
